@@ -2,99 +2,62 @@ name: Update and Deploy
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   workflow_dispatch:
   schedule:
-    - cron: '0 0 */3 * *' # 每3天运行一次 (UTC 0:00)
+    - cron: "0 0 */3 * *" # 每 3 天运行一次（UTC 0:00）
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.12"
 
-      - name: Check Upstream Commit
-        id: check_upstream
-        run: |
-          # 获取上游最新 commit hash
-          UPSTREAM_LATEST=$(git ls-remote https://github.com/hitokoto-osc/sentences-bundle.git HEAD | awk '{ print $1 }')
-          echo "Latest upstream commit: $UPSTREAM_LATEST"
-          
-          # 强制构建逻辑：如果是手动触发或代码推送，忽略检查
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
-             echo "Manual trigger or push detected. Forcing build."
-             echo "skip_build=false" >> $GITHUB_OUTPUT
-             echo "$UPSTREAM_LATEST" > .upstream_last_commit
-             exit 0
-          fi
-          
-          # 尝试读取上次缓存的 commit hash (如果有)
-          if [ -f .upstream_last_commit ]; then
-            LAST_PROCESSED=$(cat .upstream_last_commit)
-            echo "Last processed commit: $LAST_PROCESSED"
-            
-            if [ "$UPSTREAM_LATEST" == "$LAST_PROCESSED" ]; then
-              echo "No new updates from upstream. Skipping build."
-              echo "skip_build=true" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          else
-            echo "No previous commit record found. Proceeding with build."
-          fi
-          
-          echo "skip_build=false" >> $GITHUB_OUTPUT
-          echo "$UPSTREAM_LATEST" > .upstream_last_commit
+      - name: Fetch latest sentences
+        run: git clone --depth 1 https://github.com/hitokoto-osc/sentences-bundle.git
 
-      - name: Remove Prev
-        if: steps.check_upstream.outputs.skip_build != 'true'
-        run: |
-          rm -rf categories
-          rm -rf orig_data
-          rm -f rules.txt
-          
-      - name: Clone origin
-        if: steps.check_upstream.outputs.skip_build != 'true'
-        run: git clone https://github.com/hitokoto-osc/sentences-bundle
-          
-      - name: Update content
-        if: steps.check_upstream.outputs.skip_build != 'true'
+      - name: Generate static API data
         run: python gen_advanced.py
 
-      - name: Remove origin
-        if: steps.check_upstream.outputs.skip_build != 'true'
+      - name: Validate generated site
+        shell: bash
         run: |
-          rm -rf sentences-bundle
-        
-      - name: Commit changes
-        if: steps.check_upstream.outputs.skip_build != 'true'
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          
-          # 防止 push 冲突
-          git pull origin main --rebase || echo "Rebase failed, trying merge" || git merge origin/main
-          # 提交所有更改（包括数据文件）
-          git add .
-          
-          # 提交
-          git commit -m "Update hitokoto data and rules [skip ci]" || echo "No changes to commit"
-          
-          # 推送
-          git push
-        
+          test -s rules.txt
+          test -d orig_data
+          test -d categories
+          test "$(find orig_data -type f -name '*.json' | wc -l)" -ge 65536
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          for path in [Path("orig_data/0000.json"), *sorted(Path("categories").glob("*/000.json"))]:
+              with path.open(encoding="utf-8") as file:
+                  json.load(file)
+          PY
+
+      - name: Remove source data
+        run: rm -rf sentences-bundle
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

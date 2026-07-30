@@ -9,9 +9,6 @@ import math
 # 4 -> 65,536 个文件
 MIN_HEX_LEN = 4
 
-# 每个文件是否存储多条数据
-STORE_AS_LIST = False
-
 SOURCE_DIR = Path("sentences-bundle/sentences")
 OUTPUT_DIR = Path("orig_data")
 CATEGORIES_DIR = Path("categories")
@@ -87,33 +84,18 @@ def write_files(data_list, base_dir: Path, hex_len: int, shard_depth: int):
 
     total_slots = 16 ** hex_len
     
-    # 总是初始化所有 buckets
-    buckets = [[] for _ in range(total_slots)]
-    
-    # 循环填充所有槽位
+    # 边循环边写入，避免为每个槽位预先创建列表。
     data_cycle = cycle(data_list)
     print(f"  [Fill-Full] Filling {total_slots} slots with {len(data_list)} items...")
-    for i in range(total_slots):
-        buckets[i].append(next(data_cycle))
-    
-    # 写入文件
-    count = 0
-    for i in range(total_slots):
-        content = buckets[i]
-        if not content:
-            continue
-            
+    for i, final_data in enumerate(next(data_cycle) for _ in range(total_slots)):
         hex_str = format(i, f'0{hex_len}x')
         file_path = get_file_path(base_dir, hex_str, shard_depth)
         ensure_dir(file_path.parent)
-        
-        # 单文件单对象逻辑
-        final_data = content[0]
-            
+
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(final_data, f, ensure_ascii=False, separators=(',', ':'))
-            
-        count += 1
+
+        count = i + 1
         if count % 10000 == 0:
             print(f"    Written {count}/{total_slots} files...")
 
@@ -132,10 +114,10 @@ def main():
     category_map = {} # key: category_name, value: list of objects
 
     if not SOURCE_DIR.exists():
-        print(f"Source directory {SOURCE_DIR} does not exist. Please run inside the correct path.")
-        return
+        raise SystemExit(f"Source directory {SOURCE_DIR} does not exist. Please run inside the correct path.")
 
-    for file_path in SOURCE_DIR.glob("*.json"):
+    load_errors = []
+    for file_path in sorted(SOURCE_DIR.glob("*.json")):
         category_name = file_path.stem # e.g. 'a', 'b'
         with open(file_path, "r", encoding="utf-8") as f:
             try:
@@ -147,12 +129,16 @@ def main():
                         category_map[category_name] = []
                     category_map[category_name].extend(data)
             except Exception as e:
-                print(f"Error reading {file_path}: {e}")
+                load_errors.append(f"{file_path}: {e}")
+
+    if load_errors:
+        details = "\n".join(f"  - {error}" for error in load_errors)
+        raise SystemExit(f"Failed to load {len(load_errors)} source file(s):\n{details}")
 
     if not all_objects:
-        print("Error: No data found in SOURCE_DIR.")
-        print("Please ensure 'sentences-bundle' is cloned and contains .json files.")
-        return
+        raise SystemExit(
+            "No data found in SOURCE_DIR. Ensure 'sentences-bundle' is cloned and contains JSON files."
+        )
 
     # 1. 生成全量数据
     global_hex_len = calculate_hex_len(len(all_objects), MIN_HEX_LEN)
@@ -188,27 +174,29 @@ def main():
     rule_category = generate_cf_rule(True, cat_hex_len, SHARD_DEPTH, categories=list(valid_categories.keys()))
     
     with open("rules.txt", "w", encoding="utf-8") as f:
-        f.write("=== Cloudflare Transform Rules (Auto Generated) ===\n")
+        f.write("=== Cloudflare 转换规则（自动生成）===\n")
         if not TARGET_DOMAIN:
-            f.write("!!! IMPORTANT: Replace 'api.yourdomain.com' with your actual subdomain !!!\n\n")
+            f.write("重要提示：请将 'api.yourdomain.com' 替换为你的实际 API 域名。\n\n")
         else:
-            f.write(f"Target Domain: {TARGET_DOMAIN}\n\n")
+            f.write(f"目标域名：{TARGET_DOMAIN}\n\n")
         
         domain_check = f'(http.host eq "{TARGET_DOMAIN if TARGET_DOMAIN else "api.yourdomain.com"}")'
 
-        f.write(f"[Rule 1: Hitokoto Random] (HEX_LEN={global_hex_len}, SHARD={SHARD_DEPTH})\n")
-        f.write(f"Condition: {domain_check} and (http.request.uri.path eq \"/\") and (not http.request.uri.query contains \"c=\")\n")
-        f.write("Expression:\n")
+        f.write(f"[规则 1：全库随机一言]（十六进制长度={global_hex_len}，分片深度={SHARD_DEPTH}）\n")
+        f.write("匹配条件：\n")
+        f.write(f"{domain_check} and (http.request.uri.path eq \"/\") and (not http.request.uri.query contains \"c=\")\n")
+        f.write("路径重写表达式：\n")
         f.write(rule_global + "\n\n")
         
         f.write("-" * 50 + "\n\n")
         
-        f.write(f"[Rule 2: Hitokoto Category] (HEX_LEN={cat_hex_len}, SHARD={SHARD_DEPTH})\n")
-        f.write(f"Condition: {domain_check} and (http.request.uri.path eq \"/\") and (http.request.uri.query contains \"c=\")\n")
-        f.write("Expression:\n")
+        f.write(f"[规则 2：按分类随机一言]（十六进制长度={cat_hex_len}，分片深度={SHARD_DEPTH}）\n")
+        f.write("匹配条件：\n")
+        f.write(f"{domain_check} and (http.request.uri.path eq \"/\") and (http.request.uri.query contains \"c=\")\n")
+        f.write("路径重写表达式：\n")
         f.write(rule_category + "\n")
         
-    print(f"Done. Please check 'rules.txt' for the latest Cloudflare rules.")
+    print("生成完成，请查看 rules.txt 获取最新的 Cloudflare 转换规则。")
 
 if __name__ == "__main__":
     main()

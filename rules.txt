@@ -1,14 +1,16 @@
-=== Cloudflare Transform Rules (Auto Generated) ===
-Target Domain: hitokoto.blueke.dpdns.org
+=== Cloudflare 转换规则（自动生成）===
+目标域名：hitokoto.blueke.dpdns.org
 
-[Rule 1: Hitokoto Random] (HEX_LEN=4, SHARD=0)
-Condition: (http.host eq "hitokoto.blueke.dpdns.org") and (http.request.uri.path eq "/") and (not http.request.uri.query contains "c=")
-Expression:
+[规则 1：全库随机一言]（十六进制长度=4，分片深度=0）
+匹配条件：
+(http.host eq "hitokoto.blueke.dpdns.org") and (http.request.uri.path eq "/") and (not http.request.uri.query contains "c=")
+路径重写表达式：
 concat("/orig_data/", substring(uuidv4(cf.random_seed), 0, 4), ".json")
 
 --------------------------------------------------
 
-[Rule 2: Hitokoto Category] (HEX_LEN=3, SHARD=0)
-Condition: (http.host eq "hitokoto.blueke.dpdns.org") and (http.request.uri.path eq "/") and (http.request.uri.query contains "c=")
-Expression:
+[规则 2：按分类随机一言]（十六进制长度=3，分片深度=0）
+匹配条件：
+(http.host eq "hitokoto.blueke.dpdns.org") and (http.request.uri.path eq "/") and (http.request.uri.query contains "c=")
+路径重写表达式：
 concat("/categories/", substring(http.request.uri.query, 2, 3), "/", substring(uuidv4(cf.random_seed), 0, 3), ".json")

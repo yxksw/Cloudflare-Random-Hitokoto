@@ -1,0 +1,6 @@
+# Generated site data is built and deployed by GitHub Actions.
+/orig_data/
+/categories/
+/sentences-bundle/
+__pycache__/
+*.py[cod]
